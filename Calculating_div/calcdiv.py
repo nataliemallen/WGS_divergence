@@ -1,6 +1,9 @@
+#to run: python3 calcdiv.py pair.var.txt pair.srt.paf
+
 import csv
 import math
 import os
+import sys
 
 def calculate_distances(var_file, paf_file):
     # Initialize counts for transitions, transversions, and total differences
@@ -64,5 +67,15 @@ def calculate_distances(var_file, paf_file):
         writer.writerow(['K3P Distance', k3p_distance])
         writer.writerow(['JC Distance', jc_distance])
 
-# Call the function with your input and output file paths
-calculate_distances('falcons.var.txt', 'falcons.srt.paf')
+if __name__ == "__main__":
+    # Check if the correct number of command line arguments is provided
+    if len(sys.argv) != 3:
+        print("Usage: python3 script.py <input1> <input2>")
+        sys.exit(1)
+
+    # Get input file paths from command line arguments
+    input_file1 = sys.argv[1]
+    input_file2 = sys.argv[2]
+
+    # Call the function with the input file paths
+    calculate_distances(input_file1, input_file2)
