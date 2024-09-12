@@ -1,14 +1,17 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-params.csvA = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/genomes.csv"
-params.temp_dir = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/tmp"
-params.genomes = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/genomes"
-params.final_genomes = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/final_genomes"
-params.pairs = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/pairs.csv"
-params.bin_dir = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/bin"
-params.alignment_output = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/alignments"
-params.divergence_output = "/scratch/negishi/allen715/nextflow_templates/gd_pipe/divergence"
+//paths to files
+//for genomes.csv and pairs.csv, find and replace spaces with _
+
+params.csvA = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/batch1_genomes.csv"
+params.temp_dir = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/tmp"
+params.genomes = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/genomes"
+params.final_genomes = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/final_genomes"
+params.pairs = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/batch1_pairs.csv"
+params.bin_dir = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/bin"
+params.alignment_output = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/alignments"
+params.divergence_output = "/scratch/negishi/allen715/shared/nextflow/gd_pipe/divergence"
 
 process get_genomes {
     tag "$accession"
@@ -23,6 +26,22 @@ process get_genomes {
     script:
     """
     sh ${params.bin_dir}/get_genomes_nf.sh $params.temp_dir \$PWD $accession $genus $species $assembly
+    """
+}
+
+process remove_mito {
+    tag "$accession"
+    clusterOptions '--ntasks 16 --time 01:00:00 -A johnwayne'
+
+    input:
+    tuple val(accession), val(genus), val(species), val(assembly), val(full_scientific_name), val(taxonomic_group), val(mask), path(genome_file)
+
+    output:
+    tuple val(accession), val(genus), val(species), val(assembly), val(full_scientific_name), val(taxonomic_group), val(mask), path("${genome_file.baseName}.nm.fna")
+
+    script:
+    """
+    python3 ${params.bin_dir}/remove_mito.py ${genome_file}
     """
 }
 
@@ -75,7 +94,7 @@ process move_to_final {
 
 process align_genomes {
     tag "$pair"
-    clusterOptions '--ntasks 64 --time 1-00:00:00 -A highmem'
+    clusterOptions '--ntasks 64 --time 1-00:00:00 -A highmem --mem-per-cpu 8G'
 
     input:
     tuple val(pair), path(genome1), path(genome2)
@@ -142,57 +161,34 @@ process concatenate_divergence {
 
     # Ensure the output directory exists
     mkdir -p ${params.divergence_output}
+    cd ${params.divergence_output}
 
-    echo "pair,raw,k2p,k3p,jc" > ${params.divergence_output}/all_divergence.csv
-    for file in ${divergence_files}; do
-        echo "Processing file: \$file"
-        pair=\$(basename \${file} _distance.csv)
-        distances=\$(tail -n +2 \${file} | tr '\\n' ',' | sed 's/,\$//')
-        echo "\${pair},\${distances}" >> ${params.divergence_output}/all_divergence.csv
+    cat *distance.csv > all_divergence.csv
+    
     done
     """
 }
 
 workflow {
-    print "Welcome to the workflow operating on an input CSV"
-    print 'You will be working on the following file: ' + params.csvA
-
     Channel.fromPath(params.csvA) \
         | splitCsv(header: true) \
         | map { row -> [row.accession, row.genus, row.species, row.assembly, row.full_scientific_name, row.taxonomic_group, row.mask] } \
         | set { csvA }
 
     get_genomes(csvA) \
+        | remove_mito \
         | mask \
         | move_to_final \
         | set { final_genomes }
 
     Channel.fromPath(params.pairs) \
-    | splitCsv(header: true) \
-    | map { row -> 
-        def genome1 = file("${params.final_genomes}/${row.genome1}")
-        def genome2 = file("${params.final_genomes}/${row.genome2}")
-        println "Processing pair: ${row.pair}, Genome1: ${genome1}, Genome2: ${genome2}"
-        [row.pair, genome1, genome2]
-    } \
-    | view { pair, genome1, genome2 -> 
-        println "Aligning genomes for pair: ${pair}"
-        println "Full path for Genome 1: ${genome1.toAbsolutePath()}"
-        println "Full path for Genome 2: ${genome2.toAbsolutePath()}"
-        return [pair, genome1, genome2]
-    } \
-    | align_genomes \
-    | set { aligned_pairs }
-
-    aligned_pairs \
-        | map { pair, paf, srt_paf, var_file -> 
-            [pair, srt_paf, var_file.toString().replaceFirst('.srt.paf', '.var.txt')]
+        | splitCsv(header: true) \
+        | map { row -> 
+            def genome1 = file("${params.final_genomes}/${row.genome1}")
+            def genome2 = file("${params.final_genomes}/${row.genome2}")
+            [row.pair, genome1, genome2]
         } \
+        | align_genomes \
         | calculate_divergence \
-        | collect() \
-        | view { divergence_files -> 
-            println "Divergence files passed to concatenate_divergence: ${divergence_files}"
-        } \
         | concatenate_divergence
 }
-
