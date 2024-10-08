@@ -114,5 +114,3 @@ workflow {
         | mask
         | move_to_final
         | set { final_genomes }
-
-      % use download_errors.log to remove necessary files from pairs.csv; then use pairs. csv as input for main_2.nf
